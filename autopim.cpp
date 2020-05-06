@@ -37,6 +37,17 @@ namespace {
         LoopRange(int s, int e) : start(s), end(e) {}
     };
 
+    struct CompiledSubLoop {
+        unsigned int sub_loop_index;
+        std::string compiled_expr;
+        LoopRange range;
+        bool interchanged = false;
+        bool compiled = false;
+        unsigned int cost = 0;
+    };
+
+    std::map<unsigned int, CompiledSubLoop> sub_loops;
+
     enum ASTType {
         AST_TYPE_CONSTANT,
         AST_TYPE_ARRAY,
@@ -52,16 +63,17 @@ namespace {
     };
 
     struct CostModel {
-        unsigned int cost_add;
-        unsigned int cost_sub;
-        unsigned int cost_mul;
-        unsigned int cost_div;
-        unsigned int cost_shift;
-        unsigned int cost_and;
-        unsigned int cost_or;
-        unsigned int cost_xor;
-        unsigned int cost_load;
-        unsigned int cost_constant;
+        unsigned int cost_add = 0;
+        unsigned int cost_sub = 0;
+        unsigned int cost_mul = 0;
+        unsigned int cost_div = 0;
+        unsigned int cost_shift = 0;
+        unsigned int cost_and = 0;
+        unsigned int cost_or = 0;
+        unsigned int cost_xor = 0;
+        unsigned int cost_load = 0;
+        unsigned int cost_cmp = 0;
+        unsigned int cost_constant = 0;
 
         unsigned int computeCost(ExtractAST* ast) {
             if (ast != NULL) {
@@ -114,6 +126,9 @@ namespace {
                             case Instruction::Shl:  
                                 return cost_op0 + cost_op1 + cost_shift;
 
+                            case Instruction::ICmp:
+                                return cost_op0 + cost_op1 + cost_cmp;
+
                             default:
                                 return cost_op0 + cost_op1 + 0;
                         }
@@ -160,11 +175,17 @@ namespace {
                         case Instruction::Xor:
                         case Instruction::LShr:
                         case Instruction::AShr:
-                        case Instruction::Shl: {
+                        case Instruction::Shl:
+                        case Instruction::ICmp: {
                             auto ast = new ExtractAST(AST_TYPE_OP, value);
                             ast->left = extractComputation(instruction->getOperand(0), pattern);
                             ast->right = extractComputation(instruction->getOperand(1), pattern);
                             return ast;
+                        }
+
+                        case Instruction::ZExt:
+                        case Instruction::SExt: {
+                            return extractComputation(instruction->getOperand(0), pattern);
                         }
 
                         case Instruction::Load: {
@@ -198,50 +219,54 @@ namespace {
                             instruction = dyn_cast<Instruction>(ast->value);
                             switch (instruction->getOpcode()) {
                                 case Instruction::Add:
-                                    outs() << "(ADD ";
+                                    outs() << " (ADD";
                                     break;
                                 case Instruction::Sub:
-                                    outs() << "(SUB ";
+                                    outs() << " (SUB";
                                     break;
 
                                 case Instruction::SDiv:
-                                    outs() << "(SDIV ";
+                                    outs() << " (SDIV";
                                     break;
 
                                 case Instruction::UDiv:
-                                    outs() << "(UDIV ";
+                                    outs() << " (UDIV";
                                     break;
 
                                 case Instruction::Mul:
-                                    outs() << "(MUL ";
+                                    outs() << " (MUL";
                                     break;
 
                                 case Instruction::And:
-                                    outs() << "(AND ";
+                                    outs() << " (AND";
                                     break;
 
                                 case Instruction::Or:
-                                    outs() << "(OR ";
+                                    outs() << " (OR";
                                     break;
 
                                 case Instruction::Xor:
-                                    outs() << "(XOR ";
+                                    outs() << " (XOR";
                                     break;
 
                                 case Instruction::LShr:
-                                    outs() << "(LSHR ";
+                                    outs() << " (LSHR";
                                     break;
 
                                 case Instruction::AShr:
-                                    outs() << "(ASHR ";
+                                    outs() << " (ASHR";
                                     break;
 
                                 case Instruction::Shl:  
-                                    outs() << "(SHL ";
+                                    outs() << " (SHL";
+                                    break;
+
+                                case Instruction::ICmp:
+                                    outs() << " (CMP";
                                     break;
 
                                 default:
-                                    outs() << "(UNKNOWN_OP ";
+                                    outs() << " (UNKNOWN_OP";
                                     break;
                             }
 
@@ -435,43 +460,234 @@ namespace {
                 Value* value;
                 if (subLoopIsVectorLoop(sub_loop, pattern, &value)) {
                     outs() << "can be done.\n";        
-                    LoopRange range = getLoopRange(sub_loop);
+                    CompiledSubLoop csl;
+                    csl.sub_loop_index = sub_loop_num;
+                    csl.compiled = true;
+                    csl.range = getLoopRange(sub_loop);
                     
                     auto ast = extractComputation(value, pattern);
 
                     std::stringstream ss;
-                    ss << "pim_runindex(sub_loop_fn" << sub_loop_num << ", " << range.start << ", " << range.end <<");";
+                    ss << "pim_runindex(sub_loop_fn" << sub_loop_num << ", " << csl.range.start << ", " << csl.range.end <<");";
                     outs() << "Compiled: " << ss.str().c_str() << "\n";
                     outs() << "define sub_loop_fn" << sub_loop_num << " = ";
                     compileAST(ast);
                     outs() << "\n";
+                    CostModel cm;
+                    csl.cost = cm.computeCost(ast);
 
-                    compiled_sub_loops[sub_loop_num] = ss.str();
+                    outs() << "Sub-loop function area cost (approx.): " << csl.cost << "\n";
+
+                    csl.compiled_expr = ss.str();
+
+                    sub_loops[sub_loop_num] = csl;
                 }
                 else {
+                    CompiledSubLoop csl;
+                    csl.compiled = false;
+                    sub_loops[sub_loop_num] = csl;
                     outs() << " cannot be done.\n";
                 }
             }
+
+            //check if an instruction is a memeber of a certain basic block
+            bool isInstructionInBasicBlock(Instruction* instr, BasicBlock* bb) {
+                for (auto& instruction : *bb) {
+                    if (instr == &instruction) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            //erase is valid as long as there isn't something in the loop that is from
+            //outside the loop, minus the array accesses
+            bool isEraseSubLoopValid(Loop* loop, DominatorTree& DT) {
+                auto header = loop->getHeader();
+                auto exit = loop->getExitBlock();
+
+                BasicBlock* block = nullptr;
+                for (auto succ_iter = succ_begin(header); succ_iter != succ_end(header); ++succ_iter) {
+                    if (*succ_iter != exit) {
+                        block = *succ_iter;
+                        break;
+                    }
+                }
+
+                BasicBlockEdge bbe(loop->getHeader(), block);
+
+                for (auto& instr : *block) {
+                    for (int i = 0; i < instr.getNumOperands(); i++) {
+                        auto& u = instr.getOperandUse(i);
+                        if (isa<GetElementPtrInst>(instr) || isa<StoreInst>(instr) || isa<LoadInst>(instr)) {
+                            continue;
+                        }
+                        
+                        if (!DT.dominates(bbe, u)) {
+                            return false;
+                        }
+                    }
+                }
+                
+                return true;
+            }
+    
+            //insert PIM calls in the subloop header to trigger pim computations
+            //of the form pim_runindex(subloop_num, num)
+            void insertSubLoopPIMCall(Loop* sub_loop, int sub_loop_num, Value* outer_iv) {
+                auto header = sub_loop->getHeader();
+                Function* runindex_fn = header->getParent()->getParent()->getFunction("pim_runindex");
+                if (!runindex_fn) {
+                    outs() << "[Error] Could not load subloop PIM runtime function.\n";
+                }
+                
+                Value *subloop_num_v = ConstantInt::getSigned(IntegerType::get(runindex_fn->getContext(), 32), sub_loop_num);
+                Value* args[2] = {subloop_num_v, outer_iv};
+                
+                FunctionType* ft = cast<FunctionType>(cast<PointerType>(runindex_fn->getType())->getElementType());
+
+                if (!ft) {
+                    outs() << "[Error] could not get function type.\n";
+                    return;
+                }
+                
+                CallInst::Create(ft, runindex_fn, args, "runindex", header->getFirstNonPHI());
+            }
+
+            //insert pim_initsubloop call
+            void insertPIMInitCall(Loop* loop, int subloop_num, int range_start, int range_end) {
+                auto header = loop->getHeader();
+                Function* init_fn = header->getParent()->getParent()->getFunction("pim_initsubloop");
+                if (!init_fn) {
+                    outs() << "[Error] Could not load loop PIM runtime function.\n";
+                }
+
+                FunctionType* ft = cast<FunctionType>(cast<PointerType>(init_fn->getType())->getElementType());
+
+                if (!ft) {
+                    outs() << "[Error] could not get function type.\n";
+                    return;
+                }
+
+                auto& context =  init_fn->getContext();
+
+                Value *subloop_num_v = ConstantInt::getSigned(IntegerType::get(context, 32), subloop_num); 
+                Value *range_start_v = ConstantInt::getSigned(IntegerType::get(context, 32), range_start); 
+                Value *range_end_v = ConstantInt::getSigned(IntegerType::get(context, 32), range_end); 
+                Value* args[3] = {subloop_num_v, range_start_v, range_end_v};
+                
+                CallInst::Create(ft, init_fn, args, "init", header->getFirstNonPHI());
+            }
+                
+            //insert PIM calls in the loop header to init the process
+            //of the form pim_initsubloop(subloop_num, range_start, range_end)                
+            void insertLoopPIMCalls(Loop* loop, int sub_loop_num_max) {
+                for (int i = 0; i < sub_loop_num_max; i++) {
+                    if (sub_loops[i].compiled) {
+                        insertPIMInitCall(loop, i, sub_loops[i].range.start, sub_loops[i].range.end);
+                    }
+                }
+            }
+  
+            //take advantage of LLVM's DCE passes
+            //erase the subloop by jumping straight from the header block to the exit
+            //i.e. make both arms of the br instruction point to the same block
+            //dead code elimination passes will clean this up automatically
+            void eraseSubLoop(Loop* sub_loop) {
+                auto header = sub_loop->getHeader();
+                auto exit = sub_loop->getExitBlock();
+            
+                if (!exit) {
+                    outs() << "Error while removing sub-loop: exit block not found.\n";
+                    return;
+                }
+               
+                for (auto& instruction : *header) {
+                    if (auto br = dyn_cast<BranchInst>(&instruction)) {
+                        br->setSuccessor(0, exit);
+                        br->setSuccessor(1, exit);
+                        outs() << "Branch modified successfully, sub-loop is now dead and will be removed.\n";
+                    }
+                }
+            }
+
 
             virtual bool runOnLoop(Loop* loop, LPPassManager& LPM) {
                 LoopInfo& loop_info = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
                 ScalarEvolution& scalar_evolution = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
                 auto& dominator_tree = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+                int single_loop_count = 447;
+                int total_cost = 0;
 
                 //run analysis only on outermost loops
                 if (loop->getLoopDepth() == 1) {
-                    outs() << "[Loop Processing Report] found compatible outer loop. Checking subloops...\n";
+                    outs() << "\n[Loop Processing Report] found compatible outer loop. Checking subloops...\n";
                     AccessPattern pattern;
                     pattern.first_idx = loop->getCanonicalInductionVariable();
                     
-                    const auto& sub_loops = loop->getSubLoops();
+                    const auto& sub_loop_vector = loop->getSubLoops();
                     int i = 0;
+                    
+                    if (sub_loop_vector.size() == 0) {
+                        outs() << "Found no subloops. Attempting to process main loop itself...\n";
+                        Value* value;
+                        if (subLoopIsVectorLoop(loop, pattern, &value)) {
+                            outs() << "can be done.\n";        
+                            LoopRange range = getLoopRange(loop);
+                            int sub_loop_num = single_loop_count++;
+                            auto ast = extractComputation(value, pattern);
 
-                    for (auto sub_loop : sub_loops) {
+                            std::stringstream ss;
+                            ss << "pim_runindex(sub_loop_fn" << sub_loop_num << ", " << range.start << ", " << range.end <<");";
+                            outs() << "Compiled: " << ss.str().c_str() << "\n";
+                            outs() << "define sub_loop_fn" << sub_loop_num << " = ";
+                            compileAST(ast);
+                            outs() << "\n";
+                            CostModel cm;
+                            int cost = cm.computeCost(ast);
+                            total_cost += cost;
+                            outs() << "Loop function area cost (approx.): " << cost << "\n";
+    
+                            insertSubLoopPIMCall(loop, sub_loop_num, pattern.first_idx);
+                            insertPIMInitCall(loop, sub_loop_num, range.start, range.end);
+                            
+                            if (isEraseSubLoopValid(loop, dominator_tree)) {
+                                outs() << "Loop can be erased.\n";
+                                eraseSubLoop(loop);
+                            }
+                            else {
+                                outs() << "Loop cannot be erased.\n";
+                            }
+                            return true;
+                        }
+                        else {
+                            outs() << " cannot be done.\n";
+                            return false; 
+                        }
+                    }
+                        
+                    for (auto sub_loop : sub_loop_vector) {
                        compileSubLoop(sub_loop, i++, pattern); 
                     }
+
+                    //remove the subloops that were compiled and replace them with
+                    //stub functions that invoke PIM stuff
+                    for (int idx = 0; idx < i; idx++) {
+                        if (sub_loops[idx].compiled) {
+                            if (isEraseSubLoopValid(sub_loop_vector[idx], dominator_tree)) {
+                                outs() << "Sub-loop can be erased.\n";
+                                insertSubLoopPIMCall(sub_loop_vector[idx], idx, pattern.first_idx);
+                                eraseSubLoop(sub_loop_vector[idx]);
+                            }
+                            else {
+                                outs() << "Sub-loop cannot be erased.\n";
+                            }
+                        }
+                    }
+            
+                    insertLoopPIMCalls(loop, i);
                 }
-                return false;
+                return true;
             }
 
             virtual void getAnalysisUsage(AnalysisUsage& AU) const {
