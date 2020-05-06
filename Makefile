@@ -1,14 +1,13 @@
 CXX = clang
 
-all: pimgen.so
+all: autopim.so
 
 CXXFLAGS = -rdynamic $(shell llvm-config --cxxflags) -g -O0
 
-pimgen.o: pimgen.cpp
+autopim.o: autopim.cpp
 
-pimgen.so: pimgen.o
+autopim.so: autopim.o
 	$(CXX) -dylib -shared $^ -o $@
-
 
 clean:
 	rm -f *.o *~ *.so
