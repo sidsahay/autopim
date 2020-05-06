@@ -7,7 +7,7 @@
 void grimfilter_kernel(int A[][100], int out[100]) {
     for (int i = 0; i < SEQUENCES; i++) {
         for (int j = 0; j < BITVECTORS; j++) {
-            out[j] = out[j] > A[i][j];
+            out[j] = out[j] + A[i][j];
         }
     }
 

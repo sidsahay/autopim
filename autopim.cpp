@@ -468,7 +468,7 @@ namespace {
                     auto ast = extractComputation(value, pattern);
 
                     std::stringstream ss;
-                    ss << "pim_runindex(sub_loop_fn" << sub_loop_num << ", " << csl.range.start << ", " << csl.range.end <<");";
+                    ss << "pim_runindex(sub_loop_fn" << sub_loop_num << ", " << "index);";
                     outs() << "Compiled: " << ss.str().c_str() << "\n";
                     outs() << "define sub_loop_fn" << sub_loop_num << " = ";
                     compileAST(ast);
@@ -638,7 +638,7 @@ namespace {
                             auto ast = extractComputation(value, pattern);
 
                             std::stringstream ss;
-                            ss << "pim_runindex(sub_loop_fn" << sub_loop_num << ", " << range.start << ", " << range.end <<");";
+                            ss << "pim_runindex(sub_loop_fn" << sub_loop_num << ", " << "index);";
                             outs() << "Compiled: " << ss.str().c_str() << "\n";
                             outs() << "define sub_loop_fn" << sub_loop_num << " = ";
                             compileAST(ast);
