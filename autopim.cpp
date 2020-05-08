@@ -62,18 +62,19 @@ namespace {
         ExtractAST(ASTType type, Value* value) : ast_type(type), value(value), left(nullptr), right(nullptr) {}
     };
 
+    //area numbers taken from Verilog synthesis
     struct CostModel {
-        unsigned int cost_add = 0;
-        unsigned int cost_sub = 0;
-        unsigned int cost_mul = 0;
-        unsigned int cost_div = 0;
-        unsigned int cost_shift = 0;
-        unsigned int cost_and = 0;
-        unsigned int cost_or = 0;
-        unsigned int cost_xor = 0;
-        unsigned int cost_load = 0;
-        unsigned int cost_cmp = 0;
-        unsigned int cost_constant = 0;
+        unsigned int cost_add = 1187;
+        unsigned int cost_sub = 1187;
+        unsigned int cost_mul = 16066;
+        unsigned int cost_div = 61252;
+        unsigned int cost_shift = 0; //negligible, it's just remapping
+        unsigned int cost_and = 50;
+        unsigned int cost_or = 50;    
+        unsigned int cost_xor = 99;   
+        unsigned int cost_load = 0;  //none because DRAM hardware does this
+        unsigned int cost_cmp = 173;   
+        unsigned int cost_constant = 0; //none because it can be hardwired in
 
         unsigned int computeCost(ExtractAST* ast) {
             if (ast != NULL) {

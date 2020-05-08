@@ -1,0 +1,8 @@
+How to Run
+----------
+Execute `run.sh` with the path to the .c file containing the function you want to optimize. Exclude the file extension.
+Eg. to run it for `tests/grimfilter.c` run
+
+./run.sh tests/grimfilter
+
+It writes an `out.bc` in the project root as output, this can be disassembled via llvm-dis to see the inserted PIM functions.

@@ -1,3 +1,6 @@
+//Kernel with the same kind of structures as the GRIM-Filter kernel
+//It is not exactly the same thing however (the original uses single bit operations)
+
 #define SEQUENCES 64
 #define BITVECTORS 32
 #define THRESHOLD 100
